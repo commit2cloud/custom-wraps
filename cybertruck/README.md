@@ -19,6 +19,9 @@ Download the template below and customize it with your own design. For complete 
 <a href="example/Camo_Sand.png"><img src="example/Camo_Sand.png" width="150"/></a>
 <a href="example/Camo_Snow.png"><img src="example/Camo_Snow.png" width="150"/></a>
 <a href="example/Camo_Stealth.png"><img src="example/Camo_Stealth.png" width="150"/></a>
+<a href="example/Christmas_Lights_1.png"><img src="example/Christmas_Lights_1.png" width="150"/></a>
+<a href="example/Christmas_Lights_2.png"><img src="example/Christmas_Lights_2.png" width="150"/></a>
+<a href="example/Christmas_Lights_3.png"><img src="example/Christmas_Lights_3.png" width="150"/></a>
 <a href="example/Clay.png"><img src="example/Clay.png" width="150"/></a>
 <a href="example/Cosmic_Burst.png"><img src="example/Cosmic_Burst.png" width="150"/></a>
 <a href="example/Digital_Camo_Green.png"><img src="example/Digital_Camo_Green.png" width="150"/></a>
@@ -48,6 +51,18 @@ Download the template below and customize it with your own design. For complete 
 <a href="example/Xmas_Lights.png"><img src="example/Xmas_Lights.png" width="150"/></a>
 <a href="example/Xray.png"><img src="example/Xray.png" width="150"/></a>
 </p>
+
+## Christmas Lights
+
+Three stills of one wrap, with the bulbs in different on/off states so switching them in Paint Shop reads as a twinkle. Strands of multicolor C9 lights follow the body lines on a night-evergreen truck with light snow. The hood carries a wreath, a Santa hat, and the portrait from the repo owner's GitHub avatar.
+
+* [Christmas_Lights_1.png](example/Christmas_Lights_1.png) — every bulb lit
+* [Christmas_Lights_2.png](example/Christmas_Lights_2.png) — phase A
+* [Christmas_Lights_3.png](example/Christmas_Lights_3.png) — phase B
+
+Load them from the Tesla app: **Creations → Wrap → Upload**, or copy the PNGs into a folder named `Wraps` on a USB drive. Then in the vehicle: **Toybox → Paint Shop → Wraps**.
+
+Regenerate or tweak the layout with `python3 generate_christmas_lights.py` in this folder (Pillow, numpy, and scipy).
 
 ---
 
