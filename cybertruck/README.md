@@ -54,7 +54,7 @@ Download the template below and customize it with your own design. For complete 
 
 ## Christmas Lights
 
-Three stills of one wrap, with the bulbs in different on/off states so switching them in Paint Shop reads as a twinkle. Strands of multicolor C9 lights follow the body lines on a night-evergreen truck with light snow. The hood carries a wreath, a Santa hat, and the portrait from the repo owner's GitHub avatar.
+Three stills of one wrap, with the bulbs in different on/off states so switching them in Paint Shop reads as a twinkle. Strands of multicolor C9 lights follow the body lines on a night-evergreen truck with light snow. The hood carries the family portrait in an oval wreath, centered on the panel.
 
 * [Christmas_Lights_1.png](example/Christmas_Lights_1.png) — every bulb lit
 * [Christmas_Lights_2.png](example/Christmas_Lights_2.png) — phase A

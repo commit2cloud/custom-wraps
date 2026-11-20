@@ -24,8 +24,8 @@ view of the same UV):
     Left bar      (x ~26-90)  front fascia. +x is up, +y is driver's side.
     Right bar     (x ~919-1016) tailgate. +x is down, +y is driver's side.
 
-The hood portrait is drawn upright, then rotated 90 degrees clockwise so the
-head points at the windshield.
+The family photo is drawn upright, then rotated 90 degrees clockwise so the
+heads point at the windshield and the group reads left-to-right from the front.
 
 Requires Pillow and numpy. Run from anywhere:
 
@@ -44,7 +44,9 @@ from scipy import ndimage
 
 ROOT = Path(__file__).resolve().parent
 TEMPLATE = ROOT / "template.png"
-AVATAR = ROOT / "assets" / "commit2cloud_avatar.png"
+FAMILY = ROOT / "assets" / "family_photo.jpg"
+# Tight crop of the four people on the 1600x1067 source. Every head stays in frame.
+FAMILY_CROP = (160, 0, 1520, 780)
 OUT_DIR = ROOT / "example"
 PREVIEW_DIR = ROOT / "preview"
 
@@ -65,11 +67,16 @@ WIRE = (14, 58, 32)
 WIRE_HI = (36, 92, 48)
 SOCKET = (18, 28, 20)
 
-# Hood medallion. Center is filled in from the hood island at runtime
-# (largest inscribed circle). These are the fallbacks and the radii.
-HOOD_CENTER = (187, 355)
-HOOD_FACE_R = 36
-HOOD_RING_R = 50
+# Hood portrait. place_hood() recenters this on the hood island.
+# Upright size: width runs across the family, height runs heads-to-feet.
+# A clockwise quarter-turn maps height onto template +x (toward the windshield)
+# and width onto template +y (across the hood).
+HOOD_CENTER = (186, 383)
+PHOTO_H = 100
+PHOTO_W = 174
+WREATH_PAD = 6
+HOOD_RING_RX = PHOTO_H / 2 + WREATH_PAD - 1
+HOOD_RING_RY = PHOTO_W / 2 + WREATH_PAD - 1
 
 BULB_SPACING = 28
 RING_SPACING = 17
@@ -109,13 +116,49 @@ def panel_masks(mask: np.ndarray) -> dict[str, np.ndarray]:
     return found
 
 
+def _ellipse_inside(hood: np.ndarray, cx: int, cy: int, rx: float, ry: float) -> bool:
+    if rx < 2 or ry < 2:
+        return False
+    yy, xx = np.ogrid[: hood.shape[0], : hood.shape[1]]
+    ell = ((xx - cx) / rx) ** 2 + ((yy - cy) / ry) ** 2 <= 1.0
+    return bool(ell.any() and np.all(hood[ell]))
+
+
 def place_hood(hood: np.ndarray) -> None:
-    """Center the medallion on the largest circle inside the hood island."""
-    global HOOD_CENTER
-    dist = ndimage.distance_transform_edt(hood)
-    cy, cx = np.unravel_index(int(dist.argmax()), dist.shape)
-    HOOD_CENTER = (int(cx), int(cy))
-    print(f"  hood medallion center {HOOD_CENTER}  inscribed r={dist[cy, cx]:.1f}")
+    """Center the portrait on the hood island and size it to the panel.
+
+    Vertical center is the middle of the island. Horizontal center is the
+    middle of the hood's depth at that row, so the oval sits in the panel
+    rather than on the inscribed-circle point the single avatar used.
+    """
+    global HOOD_CENTER, PHOTO_H, PHOTO_W, HOOD_RING_RX, HOOD_RING_RY
+    rows = np.where(hood.any(axis=1))[0]
+    cy = int((int(rows.min()) + int(rows.max())) // 2)
+    cols = np.where(hood[cy])[0]
+    cx = int((int(cols.min()) + int(cols.max())) // 2)
+    HOOD_CENTER = (cx, cy)
+
+    crop = Image.open(FAMILY).convert("RGB").crop(FAMILY_CROP)
+    aspect = crop.size[0] / crop.size[1]
+    # Grow until the light ellipse, plus a couple of pixels for the bulb glass,
+    # would leave the hood. Then step back so the frame stays on the panel.
+    height = 80
+    while height < 130:
+        width = int(round(height * aspect))
+        rx = height / 2 + WREATH_PAD + 2
+        ry = width / 2 + WREATH_PAD + 2
+        if not _ellipse_inside(hood, cx, cy, rx, ry):
+            break
+        height += 2
+    height -= 2
+    PHOTO_H = height
+    PHOTO_W = int(round(height * aspect))
+    HOOD_RING_RX = PHOTO_H / 2 + WREATH_PAD - 1
+    HOOD_RING_RY = PHOTO_W / 2 + WREATH_PAD - 1
+    print(
+        f"  hood portrait center {HOOD_CENTER}  "
+        f"photo {PHOTO_W}x{PHOTO_H}  light ellipse rx={HOOD_RING_RX:.0f} ry={HOOD_RING_RY:.0f}"
+    )
 
 
 def _runs(ys: np.ndarray) -> list[np.ndarray]:
@@ -233,13 +276,20 @@ def keep_inside(points: np.ndarray, mask: np.ndarray, margin: int = 3) -> np.nda
     return np.asarray(kept, np.float64) if kept else np.zeros((0, 2))
 
 
-def circle_points(cx, cy, radius, spacing) -> np.ndarray:
-    n = max(8, int(round(2 * math.pi * radius / spacing)))
+def ellipse_points(cx, cy, rx, ry, spacing) -> np.ndarray:
+    """Bulbs around the oval portrait. Angle 0 is template +x, the windshield side."""
+    h = ((rx - ry) / (rx + ry)) ** 2
+    circ = math.pi * (rx + ry) * (1 + 3 * h / (10 + math.sqrt(max(0.0, 4 - 3 * h))))
+    n = max(12, int(round(circ / spacing)))
     ang = np.linspace(0, 2 * math.pi, n, endpoint=False)
-    # Start at the top of the portrait (which becomes the windshield side
-    # after the clockwise rotation) so the first bulb sits above the hat.
-    ang = ang - math.pi / 2
-    return np.stack([cx + radius * np.cos(ang), cy + radius * np.sin(ang)], axis=1)
+    return np.stack([cx + rx * np.cos(ang), cy + ry * np.sin(ang)], axis=1)
+
+
+def outside_portrait(x: float, y: float, margin: float = 8) -> bool:
+    cx, cy = HOOD_CENTER
+    rx = HOOD_RING_RX + margin
+    ry = HOOD_RING_RY + margin
+    return ((x - cx) / rx) ** 2 + ((y - cy) / ry) ** 2 > 1.0
 
 
 class Strand:
@@ -271,14 +321,13 @@ def build_strands(panels: dict[str, np.ndarray]) -> list[Strand]:
     # Nose (front edge) and cowl (windshield edge), skipping the medallion.
     for side_name, phase in (("left", 0), ("right", 3)):
         raw = edge_path(hood, side_name, inset=8)
-        cx, cy = HOOD_CENTER
-        trimmed = [(x, y) for x, y in raw if (x - cx) ** 2 + (y - cy) ** 2 > (HOOD_RING_R + 10) ** 2]
+        trimmed = [(x, y) for x, y in raw if outside_portrait(x, y, margin=6)]
         strands.append(Strand(trimmed, (0, 1), phase=phase, spacing=22))
 
     cx, cy = HOOD_CENTER
-    ring = circle_points(cx, cy, HOOD_RING_R, RING_SPACING)
-    # Bulbs on the ring point outward.
-    strands.append(Strand(ring, (0, 0), phase=0, wire="none", spacing=RING_SPACING, radius=(4.4, 4.4)))
+    ring = ellipse_points(cx, cy, HOOD_RING_RX, HOOD_RING_RY, RING_SPACING)
+    # Drawn after the portrait so the bulbs sit on the wreath, not under it.
+    strands.append(Strand(ring, (0, 0), phase=0, wire="ring", spacing=RING_SPACING, radius=(3.6, 3.6)))
 
     front = panels["front"]
     # Two strands across the fascia. +x is up, so the bulbs hang toward -x.
@@ -446,7 +495,7 @@ def render_lights(base: np.ndarray, strands: list[Strand], mask: np.ndarray, var
     sd = ImageDraw.Draw(sparks)
 
     for strand in strands:
-        if strand.wire != "none" and len(strand.points) >= 2:
+        if strand.wire not in ("none", "ring") and len(strand.points) >= 2:
             draw_wire(wd, strand.points, strand.wire)
         samples = resample(strand.points, strand.spacing)
         samples = keep_inside(samples, mask, margin=3)
@@ -493,116 +542,73 @@ def render_lights(base: np.ndarray, strands: list[Strand], mask: np.ndarray, var
 
 
 def make_medallion() -> Image.Image:
-    """Upright portrait, wreath, Santa hat, and bow. Rotated by the caller."""
+    """Oval family portrait with a wreath. Rotated so heads point at the windshield.
+
+    No Santa hat: the crop is four people, and a hat would cover the back row.
+    """
     scale = 3
-    r = HOOD_FACE_R * scale
-    pad = int(r * 1.55)
-    S = pad * 2
-    cx = cy = pad
-    canvas = Image.new("RGBA", (S, S), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(canvas)
+    pad = WREATH_PAD * scale
+    photo = Image.open(FAMILY).convert("RGB").crop(FAMILY_CROP)
+    face = photo.resize((PHOTO_W * scale, PHOTO_H * scale), Image.Resampling.LANCZOS)
+    fw, fh = face.size
+    canvas = Image.new("RGBA", (fw + pad * 2, fh + pad * 2), (0, 0, 0, 0))
+    ox, oy = pad, pad
 
-    # Wreath: a solid needle ring, then a few lighter clumps so it is not a dotted halo.
+    # Oval alpha, feathered so the photo meets the wreath cleanly.
+    alpha = Image.new("L", face.size, 0)
+    ImageDraw.Draw(alpha).ellipse((2, 2, fw - 3, fh - 3), fill=255)
+    alpha = alpha.filter(ImageFilter.GaussianBlur(radius=1.4))
+    face_rgba = face.convert("RGBA")
+    face_rgba.putalpha(alpha)
+
+    # Wreath band just outside the oval.
+    wreath = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+    wd = ImageDraw.Draw(wreath)
     rng = np.random.default_rng(12)
-    inner, outer = r * 1.06, r * 1.40
-    wreath = Image.new("RGBA", (S, S), (0, 0, 0, 0))
+    cx, cy = canvas.size[0] / 2, canvas.size[1] / 2
+    inner_rx, inner_ry = fw / 2 - 1, fh / 2 - 1
+    outer_rx, outer_ry = canvas.size[0] / 2 - 2, canvas.size[1] / 2 - 2
+    for i in range(360):
+        ang = i / 360 * 2 * math.pi
+        t = 0.35 + 0.55 * ((i % 3) / 2)
+        rx = inner_rx + (outer_rx - inner_rx) * t
+        ry = inner_ry + (outer_ry - inner_ry) * t
+        x = cx + rx * math.cos(ang)
+        y = cy + ry * math.sin(ang)
+        shade = (14, 72, 34, 255) if i % 2 == 0 else (22, 96, 44, 255)
+        nr = 3.2 + (i % 4)
+        wd.ellipse([x - nr, y - nr * 0.7, x + nr, y + nr * 0.7], fill=shade)
+    wreath = wreath.filter(ImageFilter.GaussianBlur(radius=1.2))
     wd = ImageDraw.Draw(wreath)
-    mid = (inner + outer) * 0.5
-    thick = (outer - inner) * 0.55
-    for i in range(240):
-        ang = i / 240 * 2 * math.pi
-        x = cx + mid * math.cos(ang)
-        y = cy + mid * math.sin(ang)
-        shade = (16, 78, 36, 255) if i % 2 == 0 else (10, 58, 28, 255)
-        wd.ellipse([x - thick, y - thick, x + thick, y + thick], fill=shade)
-    wreath = wreath.filter(ImageFilter.GaussianBlur(radius=1.4))
-    wd = ImageDraw.Draw(wreath)
-    for i in range(80):
+    for i in range(70):
         ang = rng.uniform(0, 2 * math.pi)
-        rad = rng.uniform(inner, outer)
-        x = cx + rad * math.cos(ang)
-        y = cy + rad * math.sin(ang)
-        nr = float(rng.uniform(2.0, 4.2))
-        shade = (46, 130, 62, 230) if i % 2 == 0 else (8, 48, 24, 230)
-        wd.ellipse([x - nr, y - nr * 0.6, x + nr, y + nr * 0.6], fill=shade)
+        t = rng.uniform(0.25, 0.95)
+        rx = inner_rx + (outer_rx - inner_rx) * t
+        ry = inner_ry + (outer_ry - inner_ry) * t
+        x = cx + rx * math.cos(ang)
+        y = cy + ry * math.sin(ang)
+        nr = float(rng.uniform(1.6, 3.4))
+        shade = (52, 130, 64, 220) if i % 2 == 0 else (8, 46, 22, 220)
+        wd.ellipse([x - nr, y - nr * 0.55, x + nr, y + nr * 0.55], fill=shade)
     canvas.alpha_composite(wreath)
-    draw = ImageDraw.Draw(canvas)
+    canvas.paste(face_rgba, (ox, oy), face_rgba)
 
-    # Gold rim.
+    draw = ImageDraw.Draw(canvas)
     draw.ellipse(
-        [cx - r - 2 * scale, cy - r - 2 * scale, cx + r + 2 * scale, cy + r + 2 * scale],
+        [ox + 1, oy + 1, ox + fw - 2, oy + fh - 2],
         outline=(212, 168, 64, 255),
         width=max(2, scale),
     )
+    # A few berries on the wreath, clear of the faces.
+    for ang in (0.15, 1.15, 2.2, 3.3, 4.4, 5.4):
+        rx = (inner_rx + outer_rx) * 0.5
+        ry = (inner_ry + outer_ry) * 0.5
+        bx = cx + rx * math.cos(ang)
+        by = cy + ry * math.sin(ang)
+        draw.ellipse([bx - 3.2, by - 3.2, bx + 3.2, by + 3.2], fill=(186, 28, 38, 255))
 
-    # Portrait, circular, focused on the face.
-    avatar = Image.open(AVATAR).convert("RGB")
-    face = avatar.crop((50, 0, 410, 360)).resize((r * 2, r * 2), Image.Resampling.LANCZOS)
-    mask = Image.new("L", (r * 2, r * 2), 0)
-    ImageDraw.Draw(mask).ellipse([1, 1, r * 2 - 2, r * 2 - 2], fill=255)
-    face_rgba = face.convert("RGBA")
-    face_rgba.putalpha(mask)
-    canvas.paste(face_rgba, (cx - r, cy - r), face_rgba)
-
-    # Berries on the wreath.
-    for ang in (0.4, 1.3, 2.4, 3.5, 5.1):
-        rad = (inner + outer) * 0.5
-        bx = cx + rad * math.cos(ang)
-        by = cy + rad * math.sin(ang)
-        for k, (ox, oy) in enumerate(((0, 0), (5, 2), (-4, 3))):
-            br = 3.4 if k == 0 else 2.6
-            draw.ellipse([bx + ox - br, by + oy - br, bx + ox + br, by + oy + br], fill=(196, 28, 36, 255))
-
-    # Santa hat. Brim across the upper hair, tip flopped to the viewer's right
-    # (which is the truck's left after rotation — still clearly a hat).
-    brim_y = cy - r * 0.62
-    brim_rx, brim_ry = r * 0.78, r * 0.20
-    tip = (cx + r * 0.85, cy - r * 1.45)
-    left = (cx - r * 0.62, brim_y + r * 0.02)
-    right = (cx + r * 0.48, brim_y - r * 0.02)
-    draw.polygon([left, right, tip], fill=(186, 28, 40, 255))
-    # Highlight along the left of the cone.
-    draw.polygon(
-        [left, (cx - r * 0.28, brim_y), (tip[0] - r * 0.18, tip[1] + r * 0.12)],
-        fill=(214, 64, 72, 255),
-    )
-    draw.ellipse(
-        [cx - brim_rx, brim_y - brim_ry, cx + brim_rx, brim_y + brim_ry],
-        fill=(244, 242, 236, 255),
-    )
-    draw.ellipse(
-        [cx - brim_rx, brim_y - brim_ry * 0.15, cx + brim_rx, brim_y + brim_ry],
-        fill=(226, 224, 216, 255),
-    )
-    pom_r = r * 0.20
-    draw.ellipse([tip[0] - pom_r, tip[1] - pom_r, tip[0] + pom_r, tip[1] + pom_r], fill=(250, 248, 242, 255))
-    draw.ellipse(
-        [tip[0] - pom_r * 0.4, tip[1] - pom_r * 0.55, tip[0] + pom_r * 0.15, tip[1] - pom_r * 0.05],
-        fill=(255, 255, 255, 255),
-    )
-
-    # Bow under the wreath (chin side → nose of the hood after rotation).
-    by = cy + outer * 0.98
-    loop_r = r * 0.30
-    for sign in (-1, 1):
-        lx = cx + sign * loop_r * 0.85
-        draw.ellipse([lx - loop_r, by - loop_r * 0.62, lx + loop_r * 0.15, by + loop_r * 0.62], fill=(176, 22, 34, 255))
-        draw.ellipse(
-            [lx - loop_r * 0.45, by - loop_r * 0.28, lx - loop_r * 0.05, by + loop_r * 0.28],
-            fill=(96, 10, 18, 255),
-        )
-        tail = [
-            (cx + sign * loop_r * 0.15, by + loop_r * 0.15),
-            (cx + sign * loop_r * 1.35, by + loop_r * 1.25),
-            (cx + sign * loop_r * 0.85, by + loop_r * 1.55),
-            (cx + sign * loop_r * 0.05, by + loop_r * 0.45),
-        ]
-        draw.polygon(tail, fill=(168, 20, 32, 255))
-    draw.ellipse([cx - r * 0.11, by - r * 0.11, cx + r * 0.11, by + r * 0.11], fill=(232, 190, 78, 255))
-
-    # Downscale the supersampled medallion, then turn the head toward +x
-    # (the windshield). ROTATE_270 is clockwise.
-    display = canvas.resize((S // scale, S // scale), Image.Resampling.LANCZOS)
+    display = canvas.resize((canvas.size[0] // scale, canvas.size[1] // scale), Image.Resampling.LANCZOS)
+    # Clockwise: heads (top of the upright photo) land on template +x, the windshield.
     return display.transpose(Image.Transpose.ROTATE_270)
 
 
@@ -649,8 +655,12 @@ def compose(template_rgb_alpha: np.ndarray, color: np.ndarray, mask: np.ndarray)
 
 
 def build_variant(bg: np.ndarray, strands, mask, template, variant: int) -> Image.Image:
-    lit = render_lights(bg, strands, mask, variant)
+    body = [s for s in strands if s.wire != "ring"]
+    ring = [s for s in strands if s.wire == "ring"]
+    lit = render_lights(bg, body, mask, variant)
     lit = paste_medallion(lit, mask)
+    if ring:
+        lit = render_lights(lit, ring, mask, variant)
     lit = np.where(mask[..., None], lit, 0)
     return compose(template, lit, mask)
 
